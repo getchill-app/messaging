@@ -1,12 +1,12 @@
 package messaging_test
 
 import (
-	"bytes"
 	"context"
 	"testing"
 
 	"github.com/getchill-app/messaging"
 	"github.com/keys-pub/keys"
+	"github.com/keys-pub/keys/api"
 	"github.com/keys-pub/vault/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -27,22 +27,21 @@ func TestMessenger(t *testing.T) {
 	env := testutil.NewEnv(t, nil) // vault.NewLogger(vault.DebugLevel))
 	defer env.CloseFn()
 
-	channel := keys.NewEdX25519KeyFromSeed(testSeed(0xa0))
+	channel := keys.NewEdX25519KeyFromSeed(testutil.Seed(0xa0))
 	t.Logf("Channel: %s", channel.ID())
 
 	t.Logf("Messenger (alice)")
-	cka := keys.NewEdX25519KeyFromSeed(testSeed(0x60))
-	alice := keys.NewEdX25519KeyFromSeed(testSeed(0x01))
+	cka := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x60))
+	alice := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x01))
 	aliceMsgr, aliceCloseFn := testMessenger(t, env, cka)
 	defer aliceCloseFn()
-
-	err = aliceMsgr.Register(context.TODO(), channel)
+	err = aliceMsgr.AddKey(api.NewKey(alice))
 	require.NoError(t, err)
 
-	err = aliceMsgr.Set(messaging.NewMessage(channel.ID(), alice.ID()).WithText("hi bob"))
+	_, err = aliceMsgr.AddChannel(context.TODO(), channel)
 	require.NoError(t, err)
 
-	err = aliceMsgr.Sync(context.TODO())
+	err = aliceMsgr.Send(context.TODO(), messaging.NewMessage(channel.ID(), alice.ID()).WithText("hi bob"))
 	require.NoError(t, err)
 
 	msgs1, err := aliceMsgr.Messages(channel.ID())
@@ -50,12 +49,14 @@ func TestMessenger(t *testing.T) {
 	require.Equal(t, 1, len(msgs1))
 
 	t.Logf("Messenger (bob)")
-	ckb := keys.NewEdX25519KeyFromSeed(testSeed(0x61))
-	bob := keys.NewEdX25519KeyFromSeed(testSeed(0x02))
+	ckb := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x61))
+	bob := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x02))
 	bobMsgr, bobCloseFn := testMessenger(t, env, ckb)
 	defer bobCloseFn()
+	err = bobMsgr.AddKey(api.NewKey(bob))
+	require.NoError(t, err)
 
-	err = bobMsgr.Register(context.TODO(), channel)
+	_, err = bobMsgr.AddChannel(context.TODO(), channel)
 	require.NoError(t, err)
 
 	err = bobMsgr.Sync(context.TODO())
@@ -65,14 +66,12 @@ func TestMessenger(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, msgs1, msgs2)
 
-	err = bobMsgr.Set(messaging.NewMessage(channel.ID(), bob.ID()).WithText("what's the password?"))
+	err = bobMsgr.Send(context.TODO(), messaging.NewMessage(channel.ID(), bob.ID()).WithText("what's the password?"))
 	require.NoError(t, err)
-	err = aliceMsgr.Set(messaging.NewMessage(channel.ID(), bob.ID()).WithText("roses really smell like poopoo"))
+	err = aliceMsgr.Send(context.TODO(), messaging.NewMessage(channel.ID(), alice.ID()).WithText("roses really smell like poopoo"))
 	require.NoError(t, err)
 
-	err = aliceMsgr.SyncChannel(context.TODO(), channel.ID())
-	require.NoError(t, err)
-	err = bobMsgr.SyncChannel(context.TODO(), channel.ID())
+	err = bobMsgr.Sync(context.TODO())
 	require.NoError(t, err)
 
 	msgs3, err := bobMsgr.Messages(channel.ID())
@@ -85,8 +84,4 @@ func TestMessenger(t *testing.T) {
 	msgs4, err := aliceMsgr.Messages(channel.ID())
 	require.NoError(t, err)
 	require.Equal(t, msgs3, msgs4)
-}
-
-func testSeed(b byte) *[32]byte {
-	return keys.Bytes32(bytes.Repeat([]byte{b}, 32))
 }

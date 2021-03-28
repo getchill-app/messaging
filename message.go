@@ -65,26 +65,6 @@ func (m *Message) WithTimestamp(ts int64) *Message {
 	return m
 }
 
-// Encrypt message.
-func (m *Message) Encrypt(sender *keys.EdX25519Key, recipient keys.ID) ([]byte, error) {
-	if m.RemoteTimestamp != 0 {
-		return nil, errors.Errorf("remote timestamp should be omitted on send")
-	}
-	if m.RemoteIndex != 0 {
-		return nil, errors.Errorf("remote index should be omitted on send")
-	}
-	if m.Timestamp == 0 {
-		return nil, errors.Errorf("message timestamp is not set")
-	}
-	if m.Sender == "" {
-		return nil, errors.Errorf("message sender not set")
-	}
-	if m.Sender != sender.ID() {
-		return nil, errors.Errorf("message sender mismatch")
-	}
-	return Encrypt(m, sender, recipient)
-}
-
 // MessageCommand encodes other types of messages.
 type MessageCommand struct {
 	// ChannelInfo sets info.
@@ -152,58 +132,4 @@ func (i *MessageCommand) Value() (driver.Value, error) {
 		return nil, err
 	}
 	return driver.Value(b), nil
-}
-
-// Encrypt does crypto_box_seal(pk+crypto_box(msgpack(i))).
-func Encrypt(i interface{}, sender *keys.EdX25519Key, recipient keys.ID) ([]byte, error) {
-	pk := api.NewKey(recipient).AsX25519Public()
-	if pk == nil {
-		return nil, errors.Errorf("invalid message recipient")
-	}
-	b, err := msgpack.Marshal(i)
-	if err != nil {
-		return nil, err
-	}
-	sk := sender.X25519Key()
-	encrypted := keys.BoxSeal(b, pk, sk)
-	box := append(sk.Public(), encrypted...)
-	anonymized := keys.CryptoBoxSeal(box, pk)
-	return anonymized, nil
-}
-
-// DecryptMessage decrypts message.
-func DecryptMessage(b []byte, key *keys.EdX25519Key) (*Message, error) {
-	var message Message
-	pk, err := Decrypt(b, &message, key)
-	if err != nil {
-		return nil, err
-	}
-	expected := api.NewKey(message.Sender).AsX25519Public()
-	if pk.ID() != expected.ID() {
-		return nil, errors.Errorf("message sender mismatch")
-	}
-	return &message, nil
-}
-
-// Decrypt value, returning sender public key.
-func Decrypt(b []byte, v interface{}, key *keys.EdX25519Key) (*keys.X25519PublicKey, error) {
-	box, err := keys.CryptoBoxSealOpen(b, key.X25519Key())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to decrypt message")
-	}
-	if len(box) < 32 {
-		return nil, errors.Wrapf(errors.Errorf("not enough bytes"), "failed to decrypt message")
-	}
-	pk := keys.NewX25519PublicKey(keys.Bytes32(box[:32]))
-	encrypted := box[32:]
-
-	decrypted, err := keys.BoxOpen(encrypted, pk, key.X25519Key())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to decrypt message")
-	}
-
-	if err := msgpack.Unmarshal(decrypted, v); err != nil {
-		return nil, errors.Wrapf(err, "failed to unmarshal message")
-	}
-	return pk, nil
 }

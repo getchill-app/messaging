@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/keys-pub/keys"
+	"github.com/keys-pub/keys/api"
 	"github.com/keys-pub/vault"
 	"github.com/keys-pub/vault/sync"
 	"github.com/pkg/errors"
@@ -14,12 +15,12 @@ import (
 
 // Messenger ...
 type Messenger struct {
-	vlt  *vault.Vault
-	init bool
+	vault *vault.Vault
+	init  bool
 }
 
-func NewMessenger(vlt *vault.Vault) *Messenger {
-	return &Messenger{vlt: vlt}
+func NewMessenger(vault *vault.Vault) *Messenger {
+	return &Messenger{vault: vault}
 }
 
 func initTables(db *sqlx.DB) error {
@@ -35,6 +36,16 @@ func initTables(db *sqlx.DB) error {
 			rts INTEGER,
 			ridx INTEGER
 		);`,
+		`CREATE TABLE IF NOT EXISTS channelStatus (
+			id TEXT PRIMARY KEY NOT NULL,
+			name TEXT,			
+			desc TEXT,
+			snippet TEXT,			
+			"index" INTEGER,
+			readIndex INTEGER,
+			ts INTEGER,
+			rts INTEGER			
+		);`,
 		`CREATE INDEX index_channel 
 			ON messages(channel, ridx);`,
 	}
@@ -48,11 +59,11 @@ func initTables(db *sqlx.DB) error {
 }
 
 func (m *Messenger) check() error {
-	if m.vlt.DB() == nil {
+	if m.vault.DB() == nil {
 		return vault.ErrLocked
 	}
 	if !m.init {
-		if err := initTables(m.vlt.DB()); err != nil {
+		if err := initTables(m.vault.DB()); err != nil {
 			return err
 		}
 		m.init = true
@@ -60,14 +71,18 @@ func (m *Messenger) check() error {
 	return nil
 }
 
-func (m *Messenger) Register(ctx context.Context, channel *keys.EdX25519Key) error {
+func (m *Messenger) AddChannel(ctx context.Context, channel *keys.EdX25519Key) (*api.Key, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	return m.vault.Register(ctx, channel)
+}
+
+func (m *Messenger) AddKey(key *api.Key) error {
 	if err := m.check(); err != nil {
 		return err
 	}
-	if err := m.vlt.Register(ctx, channel); err != nil {
-		return err
-	}
-	return nil
+	return m.vault.Keyring().Set(key)
 }
 
 // Save a message.
@@ -75,7 +90,25 @@ func (m *Messenger) Set(msg *Message) error {
 	if err := m.check(); err != nil {
 		return err
 	}
-	return sync.Transact(m.vlt.DB(), func(tx *sqlx.Tx) error {
+
+	channel, err := m.vault.Keyring().Key(msg.Channel)
+	if err != nil {
+		return err
+	}
+	if channel == nil {
+		return errors.Errorf("channel key not found %s", msg.Channel)
+	}
+
+	senderKey, err := m.vault.Keyring().Key(msg.Sender)
+	if err != nil {
+		return err
+	}
+	if senderKey == nil {
+		return errors.Errorf("sender key not found %s", msg.Sender)
+	}
+
+	cipher := NewSenderBox(senderKey.AsEdX25519())
+	return sync.Transact(m.vault.DB(), func(tx *sqlx.Tx) error {
 		logger.Debugf("Saving msg %s", msg.ID)
 		b, err := msgpack.Marshal(msg)
 		if err != nil {
@@ -83,7 +116,7 @@ func (m *Messenger) Set(msg *Message) error {
 		}
 		// For pending message set remote index to max
 		msg.RemoteIndex = 9223372036854775807
-		if err := sync.AddTx(tx, msg.Channel, b); err != nil {
+		if err := sync.AddTx(tx, channel.AsEdX25519(), b, cipher); err != nil {
 			return err
 		}
 		if err := insertMessageTx(tx, msg); err != nil {
@@ -93,11 +126,19 @@ func (m *Messenger) Set(msg *Message) error {
 	})
 }
 
+// Send message.
+func (m *Messenger) Send(ctx context.Context, msg *Message) error {
+	if err := m.Set(msg); err != nil {
+		return err
+	}
+	return m.SyncChannel(ctx, msg.Channel)
+}
+
 func (m *Messenger) Messages(channel keys.ID) ([]*Message, error) {
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	return getMessages(m.vlt.DB(), channel)
+	return getMessages(m.vault.DB(), channel)
 }
 
 // Sync all messages.
@@ -109,22 +150,22 @@ func (m *Messenger) Sync(ctx context.Context) error {
 
 	// Sync keyring
 	logger.Infof("Sync keyring...")
-	if err := m.vlt.Keyring().Sync(ctx); err != nil {
+	if err := m.vault.Keyring().Sync(ctx); err != nil {
 		return err
 	}
 
 	// Get changes
 	logger.Infof("Get changes...")
-	chgs, err := m.vlt.Changes(ctx)
+	chgs, err := m.vault.Changes(ctx)
 	if err != nil {
 		return err
 	}
 	logger.Infof("Found %d change(s)", len(chgs))
 
 	// Sync each changed channel
-	s := sync.NewSyncer(m.vlt.DB(), m.vlt.Client(), m.receive)
+	s := sync.NewSyncer(m.vault.DB(), m.vault.Client(), m.receive)
 	for _, chg := range chgs {
-		key, err := m.vlt.Keyring().Key(chg.VID)
+		key, err := m.vault.Keyring().Key(chg.VID)
 		if err != nil {
 			return err
 		}
@@ -143,7 +184,7 @@ func (m *Messenger) SyncChannel(ctx context.Context, channel keys.ID) error {
 	if err := m.check(); err != nil {
 		return err
 	}
-	key, err := m.vlt.Keyring().Key(channel)
+	key, err := m.vault.Keyring().Key(channel)
 	if err != nil {
 		return err
 	}
@@ -151,7 +192,7 @@ func (m *Messenger) SyncChannel(ctx context.Context, channel keys.ID) error {
 		return keys.NewErrNotFound(channel.String())
 	}
 
-	s := sync.NewSyncer(m.vlt.DB(), m.vlt.Client(), m.receive)
+	s := sync.NewSyncer(m.vault.DB(), m.vault.Client(), m.receive)
 	if err := s.Sync(ctx, key); err != nil {
 		return err
 	}
@@ -160,11 +201,26 @@ func (m *Messenger) SyncChannel(ctx context.Context, channel keys.ID) error {
 }
 
 func (m *Messenger) receive(ctx *sync.Context, events []*vault.Event) error {
+	key, err := m.vault.Keyring().Key(ctx.VID)
+	if err != nil {
+		return err
+	}
+
 	for _, event := range events {
-		var msg Message
-		if err := msgpack.Unmarshal(event.Data, &msg); err != nil {
+		b, pk, err := DecryptSenderBox(event.Data, key.AsEdX25519())
+		if err != nil {
 			return err
 		}
+
+		var msg Message
+		if err := msgpack.Unmarshal(b, &msg); err != nil {
+			return err
+		}
+
+		if !keys.X25519Match(msg.Sender, pk.ID()) {
+			return errors.Errorf("message sender mismatch")
+		}
+
 		if err := insertMessageTx(ctx.Tx, &msg); err != nil {
 			return err
 		}
