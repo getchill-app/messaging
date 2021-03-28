@@ -12,9 +12,9 @@ import (
 )
 
 func testMessenger(t *testing.T, env *testutil.Env, ck *keys.EdX25519Key) (*messaging.Messenger, func()) {
-	vlt, closeFn := testutil.NewTestVaultWithSetup(t, env, keys.Rand32(), ck)
-	msgr, err := messaging.NewMessenger(vlt)
-	require.NoError(t, err)
+	vlt, closeFn := testutil.NewTestVaultWithSetup(t, env, "testpassword", ck)
+	msgr := messaging.NewMessenger(vlt)
+
 	return msgr, closeFn
 }
 

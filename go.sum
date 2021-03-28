@@ -178,6 +178,8 @@ github.com/keys-pub/keys-ext/ws/api v0.0.0-20210326150845-39fd96e22101/go.mod h1
 github.com/keys-pub/secretservice v0.0.0-20200519003656-26e44b8df47f/go.mod h1:YRHMiVbZqh7u8xRm77CvwJNAZdDlNXwWvQ4DK0N9mYg=
 github.com/keys-pub/vault v0.0.0-20210328034218-a5b71bc99571 h1:SK2OAIAPEy4cMTHDLWH+itiRulIZ11rT1SKxa2LdHiU=
 github.com/keys-pub/vault v0.0.0-20210328034218-a5b71bc99571/go.mod h1:sxAopp7DDlZLr09N+bPs/YMRzHt7fdyanLV+TErSFm0=
+github.com/keys-pub/vault v0.0.0-20210328154023-333da5d2058d h1:5FiKAd1ZpZfG/iEyEIJruEKyzmehbm6LLwfdsQyAMR4=
+github.com/keys-pub/vault v0.0.0-20210328154023-333da5d2058d/go.mod h1:sxAopp7DDlZLr09N+bPs/YMRzHt7fdyanLV+TErSFm0=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kr/fs v0.1.0/go.mod h1:FFnZGqtBN9Gxj7eW1uZ42v5BccTP0vu6NEaFoC2HwRg=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
