@@ -36,8 +36,10 @@ func initTables(db *sqlx.DB) error {
 			rts INTEGER,
 			ridx INTEGER
 		);`,
+		`CREATE INDEX index_messages_channel_ridx
+			ON messages(channel, ridx);`,
 		`CREATE TABLE IF NOT EXISTS channelStatus (
-			id TEXT PRIMARY KEY NOT NULL,
+			channel TEXT PRIMARY KEY NOT NULL,
 			name TEXT,			
 			desc TEXT,
 			snippet TEXT,			
@@ -46,8 +48,8 @@ func initTables(db *sqlx.DB) error {
 			ts INTEGER,
 			rts INTEGER			
 		);`,
-		`CREATE INDEX index_channel 
-			ON messages(channel, ridx);`,
+		`CREATE INDEX index_channelStatus_ts
+			ON channelStatus(ts desc);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -119,7 +121,7 @@ func (m *Messenger) Set(msg *Message) error {
 		if err := sync.AddTx(tx, channel.AsEdX25519(), b, cipher); err != nil {
 			return err
 		}
-		if err := insertMessageTx(tx, msg); err != nil {
+		if err := addMessageTx(tx, msg); err != nil {
 			return err
 		}
 		return nil
@@ -139,6 +141,20 @@ func (m *Messenger) Messages(channel keys.ID) ([]*Message, error) {
 		return nil, err
 	}
 	return getMessages(m.vault.DB(), channel)
+}
+
+func (m *Messenger) ChannelStatus(channel keys.ID) (*ChannelStatus, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	return getChannelStatus(m.vault.DB(), channel)
+}
+
+func (m *Messenger) ChannelStatuses() ([]*ChannelStatus, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	return getChannelStatuses(m.vault.DB())
 }
 
 // Sync all messages.
@@ -206,6 +222,14 @@ func (m *Messenger) receive(ctx *sync.Context, events []*vault.Event) error {
 		return err
 	}
 
+	status, err := getChannelStatus(m.vault.DB(), ctx.VID)
+	if err != nil {
+		return err
+	}
+	if status == nil {
+		status = &ChannelStatus{Channel: ctx.VID}
+	}
+
 	for _, event := range events {
 		b, pk, err := DecryptSenderBox(event.Data, key.AsEdX25519())
 		if err != nil {
@@ -221,14 +245,21 @@ func (m *Messenger) receive(ctx *sync.Context, events []*vault.Event) error {
 			return errors.Errorf("message sender mismatch")
 		}
 
-		if err := insertMessageTx(ctx.Tx, &msg); err != nil {
+		if err := addMessageTx(ctx.Tx, &msg); err != nil {
 			return err
 		}
+
+		status.Update(&msg)
 	}
+
+	if err := updateChannelStatusTx(ctx.Tx, status); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func insertMessageTx(tx *sqlx.Tx, msg *Message) error {
+func addMessageTx(tx *sqlx.Tx, msg *Message) error {
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO messages (id, channel, sender, ts, prev, text, cmd, ridx, rts) VALUES 
 		($1, $2, $3, $4, $5, $6, $7, $8, $9);`,
 		msg.ID,
@@ -242,6 +273,7 @@ func insertMessageTx(tx *sqlx.Tx, msg *Message) error {
 		msg.RemoteTimestamp); err != nil {
 		return errors.Wrapf(err, "failed to insert message")
 	}
+
 	return nil
 }
 

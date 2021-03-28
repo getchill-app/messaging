@@ -74,6 +74,11 @@ func TestMessenger(t *testing.T) {
 	err = bobMsgr.Sync(context.TODO())
 	require.NoError(t, err)
 
+	status, err := bobMsgr.ChannelStatus((channel.ID()))
+	require.NoError(t, err)
+	require.Equal(t, channel.ID(), status.Channel)
+	require.Equal(t, "roses really smell like poopoo", status.Snippet)
+
 	msgs3, err := bobMsgr.Messages(channel.ID())
 	require.NoError(t, err)
 
