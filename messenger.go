@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"database/sql"
 	"sync"
 
 	"github.com/jmoiron/sqlx"
@@ -62,6 +61,10 @@ func initTables(db *sqlx.DB) error {
 	return nil
 }
 
+func (m *Messenger) Vault() *vault.Vault {
+	return m.vault
+}
+
 func (m *Messenger) check() error {
 	if m.vault.DB() == nil {
 		return vault.ErrLocked
@@ -89,6 +92,36 @@ func (m *Messenger) AddKey(key *api.Key) error {
 	}
 	logger.Debugf("Add key %s", key.ID)
 	return m.vault.Keyring().Set(key)
+}
+
+func (m *Messenger) LeaveChannel(ctx context.Context, channel keys.ID) error {
+	if err := m.check(); err != nil {
+		return err
+	}
+	logger.Debugf("Leave channel %s", channel)
+
+	if err := m.vault.Keyring().Remove(channel); err != nil {
+		return err
+	}
+
+	err := syncer.Transact(m.vault.DB(), func(tx *sqlx.Tx) error {
+		if err := deleteChannelStatusTx(tx, channel); err != nil {
+			return err
+		}
+		if err := deleteMessagesTx(tx, channel); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := m.vault.Keyring().Sync(ctx); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Save a message.
@@ -258,31 +291,27 @@ func (m *Messenger) receive(ctx *syncer.Context, events []*vault.Event) error {
 	return nil
 }
 
-func addMessageTx(tx *sqlx.Tx, msg *Message) error {
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO messages (id, channel, sender, ts, prev, text, cmd, ridx, rts) VALUES 
-		($1, $2, $3, $4, $5, $6, $7, $8, $9);`,
-		msg.ID,
-		msg.Channel,
-		msg.Sender,
-		msg.Timestamp,
-		msg.Prev,
-		msg.Text,
-		msg.Command,
-		msg.RemoteIndex,
-		msg.RemoteTimestamp); err != nil {
-		return errors.Wrapf(err, "failed to insert message")
-	}
-
-	return nil
-}
-
-func getMessages(db *sqlx.DB, channel keys.ID) ([]*Message, error) {
-	var out []*Message
-	if err := db.Select(&out, "SELECT * FROM messages WHERE channel = $1 ORDER BY ridx, ts;", channel); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, errors.Wrapf(err, "failed to get messages")
-	}
-	return out, nil
-}
+// func (m *Messenger) keysAsStatus() ([]*ChannelStatus, error) {
+// 	if err := m.check(); err != nil {
+// 		return nil, err
+// 	}
+// 	ks, err := m.vault.Keyring().Keys()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	out := []*ChannelStatus{}
+// 	for _, k := range ks {
+// 		if k.Token == "" {
+// 			continue
+// 		}
+// 		st, err := getChannelStatus(m.vault.DB(), k.ID)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		if st == nil {
+// 			st = &ChannelStatus{Channel: k.ID, Name: "unknown"}
+// 		}
+// 		out = append(out, st)
+// 	}
+// 	return out, nil
+// }

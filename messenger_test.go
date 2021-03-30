@@ -30,7 +30,7 @@ func TestMessenger(t *testing.T) {
 	channel := keys.NewEdX25519KeyFromSeed(testutil.Seed(0xa0))
 	t.Logf("Channel: %s", channel.ID())
 
-	t.Logf("Messenger (alice)")
+	t.Logf("Alice")
 	cka := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x60))
 	alice := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x01))
 	aliceMsgr, aliceCloseFn := testMessenger(t, env, cka)
@@ -48,7 +48,7 @@ func TestMessenger(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(msgs1))
 
-	t.Logf("Messenger (bob)")
+	t.Logf("Bob")
 	ckb := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x61))
 	bob := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x02))
 	bobMsgr, bobCloseFn := testMessenger(t, env, ckb)
@@ -82,11 +82,19 @@ func TestMessenger(t *testing.T) {
 	msgs3, err := bobMsgr.Messages(channel.ID())
 	require.NoError(t, err)
 
-	t.Logf("Messenger (alice, round 2)")
+	t.Logf("Alice #2")
 	err = aliceMsgr.Sync(context.TODO())
 	require.NoError(t, err)
 
 	msgs4, err := aliceMsgr.Messages(channel.ID())
 	require.NoError(t, err)
 	require.Equal(t, msgs3, msgs4)
+
+	t.Logf("Bob leave")
+	err = bobMsgr.LeaveChannel(context.TODO(), channel.ID())
+	require.NoError(t, err)
+	check, err := bobMsgr.Vault().Keyring().Get(channel.ID())
+	require.NoError(t, err)
+	require.Nil(t, check)
+
 }

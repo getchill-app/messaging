@@ -176,8 +176,6 @@ github.com/keys-pub/keys-ext/http/server v0.0.0-20210326151246-e22614b5a632/go.m
 github.com/keys-pub/keys-ext/ws/api v0.0.0-20210326150845-39fd96e22101 h1:dS+MRByWn3DcSJT/EoXh88Hd/fRWHrNjMTE61XnuKEA=
 github.com/keys-pub/keys-ext/ws/api v0.0.0-20210326150845-39fd96e22101/go.mod h1:LbgwcQT1R5W8EBRHmDeE6d2lr0t4EYS6J9ih2Jv4iN8=
 github.com/keys-pub/secretservice v0.0.0-20200519003656-26e44b8df47f/go.mod h1:YRHMiVbZqh7u8xRm77CvwJNAZdDlNXwWvQ4DK0N9mYg=
-github.com/keys-pub/vault v0.0.0-20210328220831-945430d41d89 h1:WTdDdhJ//b0tdT3MskfhA8rYvf+jqPFHt5QYd1E1Y0Q=
-github.com/keys-pub/vault v0.0.0-20210328220831-945430d41d89/go.mod h1:sxAopp7DDlZLr09N+bPs/YMRzHt7fdyanLV+TErSFm0=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/kr/fs v0.1.0/go.mod h1:FFnZGqtBN9Gxj7eW1uZ42v5BccTP0vu6NEaFoC2HwRg=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
