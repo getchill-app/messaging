@@ -78,12 +78,12 @@ func (m *Messenger) check() error {
 	return nil
 }
 
-func (m *Messenger) AddChannel(ctx context.Context, channel *keys.EdX25519Key) (*api.Key, error) {
+func (m *Messenger) AddChannel(ctx context.Context, channel *keys.EdX25519Key, account *keys.EdX25519Key) (*api.Key, error) {
 	if err := m.check(); err != nil {
 		return nil, err
 	}
 	logger.Debugf("Add channel %s", channel.ID())
-	return m.vault.Register(ctx, channel)
+	return m.vault.Register(ctx, channel, account)
 }
 
 func (m *Messenger) AddKey(key *api.Key) error {
@@ -160,6 +160,7 @@ func (m *Messenger) Set(msg *Message) error {
 
 // Send message.
 func (m *Messenger) Send(ctx context.Context, msg *Message) error {
+	logger.Debugf("Send message to %s", msg.Channel.ID())
 	if err := m.Set(msg); err != nil {
 		return err
 	}
@@ -248,7 +249,7 @@ func (m *Messenger) SyncVault(ctx context.Context, vid keys.ID) error {
 }
 
 func (m *Messenger) receive(ctx *syncer.Context, events []*vault.Event) error {
-	logger.Debugf("Received %d event(s)", len(events))
+	logger.Debugf("Key %s received %d event(s)", ctx.VID, len(events))
 	key, err := m.vault.Keyring().Key(ctx.VID)
 	if err != nil {
 		return err
