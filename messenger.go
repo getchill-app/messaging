@@ -189,7 +189,6 @@ func (m *Messenger) ChannelStatuses() ([]*ChannelStatus, error) {
 }
 
 // Sync all messages.
-// Returns error if sync is not enabled.
 func (m *Messenger) Sync(ctx context.Context) error {
 	m.smtx.Lock()
 	defer m.smtx.Unlock()
