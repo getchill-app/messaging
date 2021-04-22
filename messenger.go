@@ -39,18 +39,23 @@ func initTables(db *sqlx.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS index_messages_channel_ridx
 			ON messages(channel, ridx);`,
-		`CREATE TABLE IF NOT EXISTS channelStatus (
-			channel TEXT PRIMARY KEY NOT NULL,
-			name TEXT,			
-			desc TEXT,
-			snippet TEXT,			
-			"index" INTEGER,
-			readIndex INTEGER,
-			ts INTEGER,
-			rts INTEGER			
+		`CREATE TABLE IF NOT EXISTS channels (
+			id TEXT PRIMARY KEY NOT NULL,
+			name TEXT DEFAULT '',		
+			desc TEXT DEFAULT '',
+			snippet TEXT DEFAULT '',			
+			"index" INTEGER DEFAULT 0,
+			readIndex INTEGER DEFAULT 0,
+			ts INTEGER DEFAULT 0,
+			rts INTEGER DEFAULT 0,
+			visibility INTEGER DEFAULT 0		
 		);`,
-		`CREATE INDEX IF NOT EXISTS index_channelStatus_ts
-			ON channelStatus(ts desc);`,
+		`CREATE INDEX IF NOT EXISTS index_channels_ts
+			ON channels(ts desc);`,
+		`CREATE TABLE IF NOT EXISTS users (
+			kid TEXT PRIMARY KEY NOT NULL,
+			username TEXT				
+		);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -94,7 +99,21 @@ func (m *Messenger) AddKey(key *api.Key) error {
 	return m.vault.Keyring().Set(key)
 }
 
+func (m *Messenger) Key(kid keys.ID) (*api.Key, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	return m.vault.Keyring().Get(kid)
+}
+
 func (m *Messenger) LeaveChannel(ctx context.Context, channel keys.ID) error {
+	if err := m.check(); err != nil {
+		return err
+	}
+	return updateChannelVisibility(m.vault.DB(), channel, VisibilityHidden)
+}
+
+func (m *Messenger) DeleteChannel(ctx context.Context, channel keys.ID) error {
 	if err := m.check(); err != nil {
 		return err
 	}
@@ -105,7 +124,7 @@ func (m *Messenger) LeaveChannel(ctx context.Context, channel keys.ID) error {
 	}
 
 	err := syncer.Transact(m.vault.DB(), func(tx *sqlx.Tx) error {
-		if err := deleteChannelStatusTx(tx, channel); err != nil {
+		if err := deleteChannelTx(tx, channel); err != nil {
 			return err
 		}
 		if err := deleteMessagesTx(tx, channel); err != nil {
@@ -124,8 +143,8 @@ func (m *Messenger) LeaveChannel(ctx context.Context, channel keys.ID) error {
 	return nil
 }
 
-// Save a message.
-func (m *Messenger) Set(msg *Message) error {
+// Add a message.
+func (m *Messenger) AddMessage(msg *Message) error {
 	if err := m.check(); err != nil {
 		return err
 	}
@@ -161,7 +180,7 @@ func (m *Messenger) Set(msg *Message) error {
 // Send message.
 func (m *Messenger) Send(ctx context.Context, msg *Message) error {
 	logger.Debugf("Send message to %s", msg.Channel.ID())
-	if err := m.Set(msg); err != nil {
+	if err := m.AddMessage(msg); err != nil {
 		return err
 	}
 	return m.SyncVault(ctx, msg.Channel)
@@ -174,18 +193,18 @@ func (m *Messenger) Messages(channel keys.ID) ([]*Message, error) {
 	return getMessages(m.vault.DB(), channel)
 }
 
-func (m *Messenger) ChannelStatus(channel keys.ID) (*ChannelStatus, error) {
+func (m *Messenger) Channel(channel keys.ID) (*Channel, error) {
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	return getChannelStatus(m.vault.DB(), channel)
+	return getChannel(m.vault.DB(), channel)
 }
 
-func (m *Messenger) ChannelStatuses() ([]*ChannelStatus, error) {
+func (m *Messenger) Channels() ([]*Channel, error) {
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	return getChannelStatuses(m.vault.DB())
+	return getChannels(m.vault.DB())
 }
 
 // Sync all messages.
@@ -254,12 +273,15 @@ func (m *Messenger) receive(ctx *syncer.Context, events []*vault.Event) error {
 		return err
 	}
 
-	status, err := getChannelStatus(m.vault.DB(), ctx.VID)
+	channel, err := getChannel(m.vault.DB(), ctx.VID)
 	if err != nil {
 		return err
 	}
-	if status == nil {
-		status = &ChannelStatus{Channel: ctx.VID}
+	if channel == nil {
+		if err := insertChannelTx(ctx.Tx, ctx.VID); err != nil {
+			return err
+		}
+		channel = &Channel{ID: ctx.VID}
 	}
 
 	for _, event := range events {
@@ -281,37 +303,26 @@ func (m *Messenger) receive(ctx *syncer.Context, events []*vault.Event) error {
 			return err
 		}
 
-		status.Update(&msg)
-	}
+		if err := updateChannelTx(ctx.Tx, channel.ID, msg.Text, msg.Timestamp, msg.RemoteTimestamp); err != nil {
+			return err
+		}
 
-	if err := updateChannelStatusTx(ctx.Tx, status); err != nil {
-		return err
+		if msg.Command != nil {
+			if msg.Command.ChannelInfo != nil {
+				if msg.Command.ChannelInfo.Name != "" {
+					if err := updateChannelNameTx(ctx.Tx, channel.ID, msg.Command.ChannelInfo.Name); err != nil {
+						return err
+					}
+				}
+				if msg.Command.ChannelInfo.Description != "" {
+					if err := updateChannelDescriptionTx(ctx.Tx, channel.ID, msg.Command.ChannelInfo.Description); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 	}
 
 	return nil
 }
-
-// func (m *Messenger) keysAsStatus() ([]*ChannelStatus, error) {
-// 	if err := m.check(); err != nil {
-// 		return nil, err
-// 	}
-// 	ks, err := m.vault.Keyring().Keys()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	out := []*ChannelStatus{}
-// 	for _, k := range ks {
-// 		if k.Token == "" {
-// 			continue
-// 		}
-// 		st, err := getChannelStatus(m.vault.DB(), k.ID)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		if st == nil {
-// 			st = &ChannelStatus{Channel: k.ID, Name: "unknown"}
-// 		}
-// 		out = append(out, st)
-// 	}
-// 	return out, nil
-// }

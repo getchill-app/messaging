@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/getchill-app/messaging"
 	"github.com/keys-pub/keys"
 	"github.com/keys-pub/keys/api"
@@ -71,7 +72,7 @@ func TestMessenger(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, msgs1, msgs2)
 
-	err = bobMsgr.Send(context.TODO(), messaging.NewMessage(channel.ID(), bob.ID()).WithText("what's the password?"))
+	err = bobMsgr.Send(context.TODO(), messaging.NewMessageForChannelInfo(channel.ID(), bob.ID(), &messaging.ChannelInfo{Name: "testing"}))
 	require.NoError(t, err)
 	err = aliceMsgr.Send(context.TODO(), messaging.NewMessage(channel.ID(), alice.ID()).WithText("roses really smell like poopoo"))
 	require.NoError(t, err)
@@ -79,10 +80,11 @@ func TestMessenger(t *testing.T) {
 	err = bobMsgr.Sync(context.TODO())
 	require.NoError(t, err)
 
-	status, err := bobMsgr.ChannelStatus((channel.ID()))
+	ch, err := bobMsgr.Channel(channel.ID())
 	require.NoError(t, err)
-	require.Equal(t, channel.ID(), status.Channel)
-	require.Equal(t, "roses really smell like poopoo", status.Snippet)
+	require.Equal(t, channel.ID(), ch.ID)
+	require.Equal(t, "testing", ch.Name)
+	require.Equal(t, "roses really smell like poopoo", ch.Snippet)
 
 	msgs3, err := bobMsgr.Messages(channel.ID())
 	require.NoError(t, err)
@@ -94,12 +96,7 @@ func TestMessenger(t *testing.T) {
 	msgs4, err := aliceMsgr.Messages(channel.ID())
 	require.NoError(t, err)
 	require.Equal(t, msgs3, msgs4)
-
-	t.Logf("Bob leave")
-	err = bobMsgr.LeaveChannel(context.TODO(), channel.ID())
-	require.NoError(t, err)
-	check, err := bobMsgr.Vault().Keyring().Get(channel.ID())
-	require.NoError(t, err)
-	require.Nil(t, check)
-
 }
+
+// To keep spew import
+var _ = spew.Sdump("test")
