@@ -2,26 +2,44 @@ package messaging
 
 import (
 	"context"
-	"sync"
+	"encoding/hex"
+	"fmt"
 
+	"github.com/getchill-app/http/api"
 	"github.com/jmoiron/sqlx"
 	"github.com/keys-pub/keys"
-	"github.com/keys-pub/keys/api"
-	"github.com/keys-pub/vault"
-	"github.com/keys-pub/vault/syncer"
 	"github.com/pkg/errors"
-	"github.com/vmihailenco/msgpack/v4"
+
+	// For sqlite3 (sqlcipher driver)
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // Messenger ...
 type Messenger struct {
-	vault *vault.Vault
-	init  bool
-	smtx  sync.Mutex
+	db *sqlx.DB
 }
 
-func NewMessenger(vault *vault.Vault) *Messenger {
-	return &Messenger{vault: vault}
+func NewMessenger(path string, mk *[32]byte) (*Messenger, error) {
+	db, err := openDB(path, mk)
+	if err != nil {
+		return nil, err
+	}
+	if err := initTables(db); err != nil {
+		return nil, err
+	}
+	return &Messenger{db: db}, nil
+}
+
+func openDB(path string, mk *[32]byte) (*sqlx.DB, error) {
+	keyString := hex.EncodeToString(mk[:])
+	pragma := fmt.Sprintf("?_pragma_key=x'%s'&_pragma_cipher_page_size=4096", keyString)
+
+	db, err := sqlx.Open("sqlite3", path+pragma)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to open db")
+	}
+
+	return db, nil
 }
 
 func initTables(db *sqlx.DB) error {
@@ -66,68 +84,24 @@ func initTables(db *sqlx.DB) error {
 	return nil
 }
 
-func (m *Messenger) Vault() *vault.Vault {
-	return m.vault
+func (m *Messenger) AddChannel(cid keys.ID) error {
+	logger.Debugf("Add channel %s", cid)
+	return Transact(m.db, func(tx *sqlx.Tx) error {
+		return insertChannelTx(tx, cid)
+	})
 }
 
-func (m *Messenger) check() error {
-	if m.vault.DB() == nil {
-		return vault.ErrLocked
-	}
-	if !m.init {
-		if err := initTables(m.vault.DB()); err != nil {
+func (m *Messenger) HideChannel(ctx context.Context, channel keys.ID) error {
+	return updateChannelVisibility(m.db, channel, VisibilityHidden)
+}
+
+func (m *Messenger) DeleteChannel(ctx context.Context, kid keys.ID) error {
+	logger.Debugf("Delete channel %s", kid)
+	err := Transact(m.db, func(tx *sqlx.Tx) error {
+		if err := deleteChannelTx(tx, kid); err != nil {
 			return err
 		}
-		m.init = true
-	}
-	return nil
-}
-
-func (m *Messenger) AddChannel(ctx context.Context, channel *keys.EdX25519Key, account *keys.EdX25519Key) (*api.Key, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	logger.Debugf("Add channel %s", channel.ID())
-	return m.vault.Register(ctx, channel, account)
-}
-
-func (m *Messenger) AddKey(key *api.Key) error {
-	if err := m.check(); err != nil {
-		return err
-	}
-	logger.Debugf("Add key %s", key.ID)
-	return m.vault.Keyring().Set(key)
-}
-
-func (m *Messenger) Key(kid keys.ID) (*api.Key, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	return m.vault.Keyring().Get(kid)
-}
-
-func (m *Messenger) LeaveChannel(ctx context.Context, channel keys.ID) error {
-	if err := m.check(); err != nil {
-		return err
-	}
-	return updateChannelVisibility(m.vault.DB(), channel, VisibilityHidden)
-}
-
-func (m *Messenger) DeleteChannel(ctx context.Context, channel keys.ID) error {
-	if err := m.check(); err != nil {
-		return err
-	}
-	logger.Debugf("Leave channel %s", channel)
-
-	if err := m.vault.Keyring().Remove(channel); err != nil {
-		return err
-	}
-
-	err := syncer.Transact(m.vault.DB(), func(tx *sqlx.Tx) error {
-		if err := deleteChannelTx(tx, channel); err != nil {
-			return err
-		}
-		if err := deleteMessagesTx(tx, channel); err != nil {
+		if err := deleteMessagesTx(tx, kid); err != nil {
 			return err
 		}
 		return nil
@@ -136,40 +110,15 @@ func (m *Messenger) DeleteChannel(ctx context.Context, channel keys.ID) error {
 		return err
 	}
 
-	if err := m.vault.Keyring().Sync(ctx); err != nil {
-		return err
-	}
-
 	return nil
 }
 
-// Add a message.
-func (m *Messenger) AddMessage(msg *Message) error {
-	if err := m.check(); err != nil {
-		return err
-	}
-
-	channel, err := m.vault.Keyring().Key(msg.Channel)
-	if err != nil {
-		return err
-	}
-	senderKey, err := m.vault.Keyring().Key(msg.Sender)
-	if err != nil {
-		return err
-	}
-
-	cipher := NewSenderBox(senderKey.AsEdX25519())
-	return syncer.Transact(m.vault.DB(), func(tx *sqlx.Tx) error {
-		logger.Debugf("Saving message %s", msg.ID)
-		b, err := msgpack.Marshal(msg)
-		if err != nil {
-			return err
-		}
+// Add a pending message.
+func (m *Messenger) AddPending(msg *api.Message) error {
+	return Transact(m.db, func(tx *sqlx.Tx) error {
+		logger.Debugf("Add pending message %s", msg.ID)
 		// For pending message set remote index to max
 		msg.RemoteIndex = 9223372036854775807
-		if err := syncer.AddTx(tx, channel.AsEdX25519(), b, cipher); err != nil {
-			return err
-		}
 		if err := addMessageTx(tx, msg); err != nil {
 			return err
 		}
@@ -177,152 +126,53 @@ func (m *Messenger) AddMessage(msg *Message) error {
 	})
 }
 
-// Send message.
-func (m *Messenger) Send(ctx context.Context, msg *Message) error {
-	logger.Debugf("Send message to %s", msg.Channel.ID())
-	if err := m.AddMessage(msg); err != nil {
-		return err
-	}
-	return m.SyncVault(ctx, msg.Channel)
-}
-
-func (m *Messenger) Messages(channel keys.ID) ([]*Message, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	return getMessages(m.vault.DB(), channel)
+func (m *Messenger) Messages(channel keys.ID) ([]*api.Message, error) {
+	return getMessages(m.db, channel)
 }
 
 func (m *Messenger) Channel(channel keys.ID) (*Channel, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	return getChannel(m.vault.DB(), channel)
+	return getChannel(m.db, channel)
 }
 
 func (m *Messenger) Channels() ([]*Channel, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	return getChannels(m.vault.DB())
+	return getChannels(m.db)
 }
 
-// Sync all messages.
-func (m *Messenger) Sync(ctx context.Context) error {
-	m.smtx.Lock()
-	defer m.smtx.Unlock()
-
-	if err := m.check(); err != nil {
-		return err
-	}
-
-	// Sync keyring
-	logger.Infof("Sync keyring...")
-	if err := m.vault.Keyring().Sync(ctx); err != nil {
-		return err
-	}
-
-	// Get changes
-	logger.Infof("Get changes...")
-	chgs, err := m.vault.Changes(ctx)
-	if err != nil {
-		return err
-	}
-	logger.Infof("Found %d change(s)", len(chgs))
-
-	// Sync each changed channel
-	s := syncer.New(m.vault.DB(), m.vault.Client(), m.receive)
-	for _, chg := range chgs {
-		key, err := m.vault.Keyring().Key(chg.VID)
-		if err != nil {
-			return err
-		}
-		if err := s.Sync(ctx, key); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (m *Messenger) SyncVault(ctx context.Context, vid keys.ID) error {
-	m.smtx.Lock()
-	defer m.smtx.Unlock()
-
-	if err := m.check(); err != nil {
-		return err
-	}
-	key, err := m.vault.Keyring().Key(vid)
-	if err != nil {
-		return err
-	}
-
-	logger.Debugf("Sync vault %s", key.ID)
-	s := syncer.New(m.vault.DB(), m.vault.Client(), m.receive)
-	if err := s.Sync(ctx, key); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *Messenger) receive(ctx *syncer.Context, events []*vault.Event) error {
-	logger.Debugf("Key %s received %d event(s)", ctx.VID, len(events))
-	key, err := m.vault.Keyring().Key(ctx.VID)
-	if err != nil {
-		return err
-	}
-
-	channel, err := getChannel(m.vault.DB(), ctx.VID)
+func (m *Messenger) AddMessages(cid keys.ID, messages []*api.Message) error {
+	channel, err := getChannel(m.db, cid)
 	if err != nil {
 		return err
 	}
 	if channel == nil {
-		if err := insertChannelTx(ctx.Tx, ctx.VID); err != nil {
-			return err
-		}
-		channel = &Channel{ID: ctx.VID}
+		return errors.Errorf("no channel")
 	}
 
-	for _, event := range events {
-		b, pk, err := DecryptSenderBox(event.Data, key.AsEdX25519())
-		if err != nil {
-			return err
-		}
+	return Transact(m.db, func(tx *sqlx.Tx) error {
+		for _, msg := range messages {
+			if err := addMessageTx(tx, msg); err != nil {
+				return err
+			}
 
-		var msg Message
-		if err := msgpack.Unmarshal(b, &msg); err != nil {
-			return err
-		}
+			if err := updateChannelTx(tx, channel.ID, msg.Text, msg.Timestamp, msg.RemoteTimestamp); err != nil {
+				return err
+			}
 
-		if !keys.X25519Match(msg.Sender, pk.ID()) {
-			return errors.Errorf("message sender mismatch")
-		}
-
-		if err := addMessageTx(ctx.Tx, &msg); err != nil {
-			return err
-		}
-
-		if err := updateChannelTx(ctx.Tx, channel.ID, msg.Text, msg.Timestamp, msg.RemoteTimestamp); err != nil {
-			return err
-		}
-
-		if msg.Command != nil {
-			if msg.Command.ChannelInfo != nil {
-				if msg.Command.ChannelInfo.Name != "" {
-					if err := updateChannelNameTx(ctx.Tx, channel.ID, msg.Command.ChannelInfo.Name); err != nil {
-						return err
+			if msg.Command != nil {
+				if msg.Command.ChannelInfo != nil {
+					if msg.Command.ChannelInfo.Name != "" {
+						if err := updateChannelNameTx(tx, channel.ID, msg.Command.ChannelInfo.Name); err != nil {
+							return err
+						}
 					}
-				}
-				if msg.Command.ChannelInfo.Description != "" {
-					if err := updateChannelDescriptionTx(ctx.Tx, channel.ID, msg.Command.ChannelInfo.Description); err != nil {
-						return err
+					if msg.Command.ChannelInfo.Description != "" {
+						if err := updateChannelDescriptionTx(tx, channel.ID, msg.Command.ChannelInfo.Description); err != nil {
+							return err
+						}
 					}
 				}
 			}
 		}
+		return nil
+	})
 
-	}
-
-	return nil
 }
