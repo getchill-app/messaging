@@ -30,6 +30,10 @@ func NewMessenger(path string, mk *[32]byte) (*Messenger, error) {
 	return &Messenger{db: db}, nil
 }
 
+func (m *Messenger) Close() error {
+	return m.db.Close()
+}
+
 func openDB(path string, mk *[32]byte) (*sqlx.DB, error) {
 	keyString := hex.EncodeToString(mk[:])
 	pragma := fmt.Sprintf("?_pragma_key=x'%s'&_pragma_cipher_page_size=4096", keyString)
@@ -88,6 +92,13 @@ func (m *Messenger) AddChannel(cid keys.ID) error {
 	logger.Debugf("Add channel %s", cid)
 	return Transact(m.db, func(tx *sqlx.Tx) error {
 		return insertChannelTx(tx, cid)
+	})
+}
+
+func (m *Messenger) UpdateChannelInfo(cid keys.ID, info *api.ChannelInfo) error {
+	logger.Debugf("Update channel info %s", cid)
+	return Transact(m.db, func(tx *sqlx.Tx) error {
+		return updateChannelInfoTx(tx, cid, info)
 	})
 }
 
@@ -155,21 +166,6 @@ func (m *Messenger) AddMessages(cid keys.ID, messages []*api.Message) error {
 
 			if err := updateChannelTx(tx, channel.ID, msg.Text, msg.Timestamp, msg.RemoteTimestamp); err != nil {
 				return err
-			}
-
-			if msg.Command != nil {
-				if msg.Command.ChannelInfo != nil {
-					if msg.Command.ChannelInfo.Name != "" {
-						if err := updateChannelNameTx(tx, channel.ID, msg.Command.ChannelInfo.Name); err != nil {
-							return err
-						}
-					}
-					if msg.Command.ChannelInfo.Description != "" {
-						if err := updateChannelDescriptionTx(tx, channel.ID, msg.Command.ChannelInfo.Description); err != nil {
-							return err
-						}
-					}
-				}
 			}
 		}
 		return nil

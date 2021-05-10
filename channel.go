@@ -3,6 +3,7 @@ package messaging
 import (
 	"database/sql"
 
+	"github.com/getchill-app/http/api"
 	"github.com/jmoiron/sqlx"
 	"github.com/keys-pub/keys"
 	"github.com/pkg/errors"
@@ -31,22 +32,15 @@ func insertChannelTx(tx *sqlx.Tx, id keys.ID) error {
 	return nil
 }
 
+func updateChannelInfoTx(tx *sqlx.Tx, id keys.ID, info *api.ChannelInfo) error {
+	if _, err := tx.Exec(`UPDATE channels SET name=?, desc=? WHERE id=?`, info.Name, info.Description, id); err != nil {
+		return errors.Wrapf(err, "failed to update channel info")
+	}
+	return nil
+}
+
 func updateChannelTx(tx *sqlx.Tx, id keys.ID, snippet string, ts int64, rts int64) error {
 	if _, err := tx.Exec(`UPDATE channels SET snippet=?, ts=?, rts=? WHERE id=?`, snippet, ts, rts, id); err != nil {
-		return errors.Wrapf(err, "failed to update channel")
-	}
-	return nil
-}
-
-func updateChannelNameTx(tx *sqlx.Tx, id keys.ID, name string) error {
-	if _, err := tx.Exec(`UPDATE channels SET name=? WHERE id=?`, name, id); err != nil {
-		return errors.Wrapf(err, "failed to update channel")
-	}
-	return nil
-}
-
-func updateChannelDescriptionTx(tx *sqlx.Tx, id keys.ID, desc string) error {
-	if _, err := tx.Exec(`UPDATE channels SET desc=? WHERE id=?`, desc, id); err != nil {
 		return errors.Wrapf(err, "failed to update channel")
 	}
 	return nil
