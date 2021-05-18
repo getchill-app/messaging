@@ -51,32 +51,26 @@ func initTables(db *sqlx.DB) error {
 		`CREATE TABLE IF NOT EXISTS messages (
 			id TEXT PRIMARY KEY NOT NULL,
 			channel TEXT NOT NULL,			
-			text TEXT,
-			sender TEXT,
-			prev TEXT,
-			cmd BLOB,
-			ts INTEGER,
-			rts INTEGER,
-			ridx INTEGER
+			sender TEXT NOT NULL,
+			ts INTEGER DEFAULT 0,
+			rts INTEGER DEFAULT 0,
+			ridx INTEGER DEFAULT 0,
+			message JSON
 		);`,
 		`CREATE INDEX IF NOT EXISTS index_messages_channel_ridx
 			ON messages(channel, ridx);`,
 		`CREATE TABLE IF NOT EXISTS channels (
 			id TEXT PRIMARY KEY NOT NULL,
-			name TEXT DEFAULT '',		
-			desc TEXT DEFAULT '',
-			snippet TEXT DEFAULT '',			
-			"index" INTEGER DEFAULT 0,
-			readIndex INTEGER DEFAULT 0,
-			ts INTEGER DEFAULT 0,
-			rts INTEGER DEFAULT 0,
-			visibility INTEGER DEFAULT 0		
+			channel JSON,
+			last JSON
 		);`,
-		`CREATE INDEX IF NOT EXISTS index_channels_ts
-			ON channels(ts desc);`,
 		`CREATE TABLE IF NOT EXISTS users (
 			kid TEXT PRIMARY KEY NOT NULL,
-			username TEXT				
+			username TEXT NOT NULL			
+		);`,
+		`CREATE VIRTUAL TABLE messages_fts USING FTS5 (
+			id UNINDEXED,
+			text
 		);`,
 	}
 	for _, stmt := range stmts {
@@ -95,15 +89,11 @@ func (m *Messenger) AddChannel(cid keys.ID) error {
 	})
 }
 
-func (m *Messenger) UpdateChannelInfo(cid keys.ID, info *api.ChannelInfo) error {
-	logger.Debugf("Update channel info %s", cid)
+func (m *Messenger) UpdateChannel(c *Channel) error {
+	logger.Debugf("Update channel info %s", c.ID)
 	return Transact(m.db, func(tx *sqlx.Tx) error {
-		return updateChannelInfoTx(tx, cid, info)
+		return updateChannelTx(tx, c)
 	})
-}
-
-func (m *Messenger) HideChannel(ctx context.Context, channel keys.ID) error {
-	return updateChannelVisibility(m.db, channel, VisibilityHidden)
 }
 
 func (m *Messenger) DeleteChannel(ctx context.Context, kid keys.ID) error {
@@ -164,11 +154,15 @@ func (m *Messenger) AddMessages(cid keys.ID, messages []*api.Message) error {
 				return err
 			}
 
-			if err := updateChannelTx(tx, channel.ID, msg.Text, msg.Timestamp, msg.RemoteTimestamp); err != nil {
+			// TODO: Do this only for the last message
+			if err := updateLastMessageTx(tx, channel.ID, msg); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
 
+func (m *Messenger) Search(text string) ([]*SearchResult, error) {
+	return searchMessages(m.db, text)
 }

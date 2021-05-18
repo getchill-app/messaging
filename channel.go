@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"database/sql"
+	"encoding/json"
 
 	"github.com/getchill-app/http/api"
 	"github.com/jmoiron/sqlx"
@@ -9,16 +10,22 @@ import (
 	"github.com/pkg/errors"
 )
 
+type channelRow struct {
+	ID      keys.ID `db:"id"`
+	Channel []byte  `db:"channel"`
+	Last    []byte  `db:"last"`
+}
+
 type Channel struct {
-	ID              keys.ID `json:"id" msgpack:"id" db:"id"`
-	Name            string  `json:"name,omitempty" msgpack:"name,omitempty" db:"name"`
-	Description     string  `json:"desc,omitempty" msgpack:"desc,omitempty" db:"desc"`
-	Snippet         string  `json:"snippet,omitempty" msgpack:"snippet,omitempty" db:"snippet"`
-	Index           int64   `json:"index,omitempty" msgpack:"index,omitempty" db:"index"`
-	Timestamp       int64   `json:"ts,omitempty" msgpack:"ts,omitempty" db:"ts"`
-	RemoteTimestamp int64   `json:"rts,omitempty" msgpack:"rts,omitempty" db:"rts"`
-	ReadIndex       int64   `json:"readIndex,omitempty" msgpack:"readIndex,omitempty" db:"readIndex"`
-	Visibility      int     `json:"visibility,omitempty" msgpack:"visibility,omitempty" db:"visibility"`
+	ID              keys.ID `json:"id" msgpack:"id"`
+	Name            string  `json:"name,omitempty" msgpack:"name,omitempty"`
+	Description     string  `json:"desc,omitempty" msgpack:"desc,omitempty"`
+	Topic           string  `json:"topic,omitempty" msgpack:"topic,omitempty"`
+	Snippet         string  `json:"snippet,omitempty" msgpack:"snippet,omitempty"`
+	Index           int64   `json:"index,omitempty" msgpack:"index,omitempty"`
+	Timestamp       int64   `json:"ts,omitempty" msgpack:"ts,omitempty"`
+	RemoteTimestamp int64   `json:"rts,omitempty" msgpack:"rts,omitempty"`
+	ReadIndex       int64   `json:"readIndex,omitempty" msgpack:"readIndex,omitempty"`
 }
 
 const (
@@ -32,45 +39,71 @@ func insertChannelTx(tx *sqlx.Tx, id keys.ID) error {
 	return nil
 }
 
-func updateChannelInfoTx(tx *sqlx.Tx, id keys.ID, info *api.ChannelInfo) error {
-	if _, err := tx.Exec(`UPDATE channels SET name=?, desc=? WHERE id=?`, info.Name, info.Description, id); err != nil {
-		return errors.Wrapf(err, "failed to update channel info")
-	}
-	return nil
-}
-
-func updateChannelTx(tx *sqlx.Tx, id keys.ID, snippet string, ts int64, rts int64) error {
-	if _, err := tx.Exec(`UPDATE channels SET snippet=?, ts=?, rts=? WHERE id=?`, snippet, ts, rts, id); err != nil {
+func updateChannelTx(tx *sqlx.Tx, channel *Channel) error {
+	b, _ := json.Marshal(channel)
+	if _, err := tx.Exec(`UPDATE channels SET channel=? WHERE id=?`, b, channel.ID); err != nil {
 		return errors.Wrapf(err, "failed to update channel")
 	}
 	return nil
 }
 
-func updateChannelVisibility(db *sqlx.DB, id keys.ID, visibility int) error {
-	if _, err := db.Exec(`UPDATE channels SET visibility=? WHERE id=?`, visibility, id); err != nil {
-		return errors.Wrapf(err, "failed to update channel")
+func updateLastMessageTx(tx *sqlx.Tx, id keys.ID, last *api.Message) error {
+	b, _ := json.Marshal(last)
+	if _, err := tx.Exec(`UPDATE channels SET last=? WHERE id=?`, b, id); err != nil {
+		return errors.Wrapf(err, "failed to update last message")
 	}
 	return nil
 }
 
 func getChannel(db *sqlx.DB, id keys.ID) (*Channel, error) {
-	var channel Channel
-	if err := db.Get(&channel, "SELECT * from channels WHERE id=?", id); err != nil {
+	var row channelRow
+	if err := db.Get(&row, "SELECT * from channels WHERE id=?", id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	return rowToChannel(&row)
+}
+
+func rowToChannel(row *channelRow) (*Channel, error) {
+	channel := Channel{
+		ID: row.ID,
+	}
+	if row.Channel != nil {
+		if err := json.Unmarshal(row.Channel, &channel); err != nil {
+			return nil, err
+		}
+	}
+	if row.Last != nil {
+		var last api.Message
+		if err := json.Unmarshal(row.Last, &last); err != nil {
+			return nil, err
+		}
+		channel.Snippet = last.Text
+		channel.Timestamp = last.Timestamp
+		channel.RemoteTimestamp = last.RemoteTimestamp
+		channel.Index = last.RemoteIndex
+	}
+
 	return &channel, nil
 }
 
 func getChannels(db *sqlx.DB) ([]*Channel, error) {
-	var channels []*Channel
-	if err := db.Select(&channels, "SELECT * from channels ORDER by ts DESC"); err != nil {
+	var rows []*channelRow
+	if err := db.Select(&rows, "SELECT * from channels"); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	channels := []*Channel{}
+	for _, row := range rows {
+		channel, err := rowToChannel(row)
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, channel)
 	}
 	return channels, nil
 }

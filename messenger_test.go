@@ -27,7 +27,7 @@ func TestMessenger(t *testing.T) {
 	aliceClient := testutil.NewTestClient(t, env)
 	alice := keys.NewEdX25519KeyFromSeed(testutil.Seed(0x01))
 
-	testutil.TestAccount(t, aliceClient, emailer, alice, "alice@keys.pub", "alice")
+	testutil.TestAccount(t, aliceClient, emailer, alice, "alice@keys.pub", "", "alice")
 
 	path := testPath()
 	mk := keys.Rand32()
@@ -39,10 +39,11 @@ func TestMessenger(t *testing.T) {
 	err = messenger.AddChannel(channel.ID())
 	require.NoError(t, err)
 
-	_, err = aliceClient.ChannelCreate(ctx, channel, alice)
+	info := &api.ChannelInfo{Name: "testing"}
+	_, err = aliceClient.ChannelCreateWithUsers(ctx, channel, info, []keys.ID{alice.ID()}, alice)
 	require.NoError(t, err)
 
-	msg := api.NewMessage(channel.ID(), alice.ID()).WithText("hi bob")
+	msg := api.NewMessage(channel.ID(), alice.ID()).WithText("Sartorial taxidermy irony ramps mixtape YOLO. Vape hella 90's VHS jianbing mumblecore, roof party ugh kogi cray occupy kombucha blue bottle.")
 	err = messenger.AddPending(msg)
 	require.NoError(t, err)
 	err = aliceClient.SendMessage(ctx, msg, channel, alice)
@@ -63,6 +64,11 @@ func TestMessenger(t *testing.T) {
 	msg.RemoteTimestamp = out[0].RemoteTimestamp
 
 	require.Equal(t, out, []*api.Message{msg})
+
+	results, err := messenger.Search("mumblecore")
+	require.NoError(t, err)
+	require.Equal(t, 1, len(results))
+	require.Equal(t, msg.ID, results[0].ID)
 }
 
 // To keep spew import
