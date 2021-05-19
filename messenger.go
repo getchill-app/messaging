@@ -68,7 +68,7 @@ func initTables(db *sqlx.DB) error {
 			kid TEXT PRIMARY KEY NOT NULL,
 			username TEXT NOT NULL			
 		);`,
-		`CREATE VIRTUAL TABLE messages_fts USING FTS5 (
+		`CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING FTS5 (
 			id UNINDEXED,
 			text
 		);`,
