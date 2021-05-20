@@ -17,23 +17,41 @@ type channelRow struct {
 }
 
 type Channel struct {
-	ID              keys.ID `json:"id" msgpack:"id"`
-	Name            string  `json:"name,omitempty" msgpack:"name,omitempty"`
-	Description     string  `json:"desc,omitempty" msgpack:"desc,omitempty"`
-	Topic           string  `json:"topic,omitempty" msgpack:"topic,omitempty"`
-	Snippet         string  `json:"snippet,omitempty" msgpack:"snippet,omitempty"`
-	Index           int64   `json:"index,omitempty" msgpack:"index,omitempty"`
-	Timestamp       int64   `json:"ts,omitempty" msgpack:"ts,omitempty"`
-	RemoteTimestamp int64   `json:"rts,omitempty" msgpack:"rts,omitempty"`
-	ReadIndex       int64   `json:"readIndex,omitempty" msgpack:"readIndex,omitempty"`
+	ID   keys.ID `json:"id" msgpack:"id"`
+	Team keys.ID `json:"team,omitempty" msgpack:"team,omitempty"`
+
+	// From channel info
+	Name        string `json:"name,omitempty" msgpack:"name,omitempty"`
+	Description string `json:"desc,omitempty" msgpack:"desc,omitempty"`
+	Topic       string `json:"topic,omitempty" msgpack:"topic,omitempty"`
+
+	// From last message
+	Snippet          string `json:"snippet,omitempty" msgpack:"snippet,omitempty"`
+	MessageIndex     int64  `json:"midx,omitempty" msgpack:"midx,omitempty"`
+	MessageTimestamp int64  `json:"mts,omitempty" msgpack:"mts,omitempty"`
+
+	// Local read status
+	ReadIndex int64 `json:"readIndex,omitempty" msgpack:"readIndex,omitempty"`
 }
 
-const (
-	VisibilityHidden int = 1
-)
+func NewChannelFromAPI(c *api.Channel, channelKey *keys.EdX25519Key) (*Channel, error) {
+	var infoOut api.ChannelInfo
+	if err := api.Decrypt(c.Info, &infoOut, channelKey); err != nil {
+		return nil, err
+	}
 
-func insertChannelTx(tx *sqlx.Tx, id keys.ID) error {
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO channels (id) VALUES ($1);`, id); err != nil {
+	return &Channel{
+		ID:          c.ID,
+		Team:        c.Team,
+		Name:        infoOut.Name,
+		Description: infoOut.Description,
+		Topic:       infoOut.Topic,
+	}, nil
+}
+
+func insertChannelTx(tx *sqlx.Tx, channel *Channel) error {
+	b, _ := json.Marshal(channel)
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO channels (id, channel) VALUES ($1, $2);`, channel.ID, b); err != nil {
 		return errors.Wrapf(err, "failed to insert channel")
 	}
 	return nil
@@ -81,9 +99,8 @@ func rowToChannel(row *channelRow) (*Channel, error) {
 			return nil, err
 		}
 		channel.Snippet = last.Text
-		channel.Timestamp = last.Timestamp
-		channel.RemoteTimestamp = last.RemoteTimestamp
-		channel.Index = last.RemoteIndex
+		channel.MessageTimestamp = last.RemoteTimestamp
+		channel.MessageIndex = last.RemoteIndex
 	}
 
 	return &channel, nil

@@ -82,10 +82,10 @@ func initTables(db *sqlx.DB) error {
 	return nil
 }
 
-func (m *Messenger) AddChannel(cid keys.ID) error {
-	logger.Debugf("Add channel %s", cid)
+func (m *Messenger) AddChannel(c *Channel) error {
+	logger.Debugf("Add channel %s", c.ID)
 	return Transact(m.db, func(tx *sqlx.Tx) error {
-		return insertChannelTx(tx, cid)
+		return insertChannelTx(tx, c)
 	})
 }
 
